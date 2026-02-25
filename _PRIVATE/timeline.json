@@ -1,0 +1,25 @@
+{
+  "session_id": "localflow-2026-02",
+  "last_updated": "2026-02-24T00:00:00Z",
+  "status": "ACTIVE",
+  "goal": {
+    "primary": "Wispr Flow-like app with local STT; fix Ctrl+D to log real transcribed speech to home",
+    "requirements": [],
+    "constraints": []
+  },
+  "session_timeline": {
+    "start": "2026-02-24T00:00:00Z",
+    "end": null,
+    "events": [
+      {"time": "00:00", "action": "Fixed STT", "details": "Replaced prompt() placeholder with real Whisper via @huggingface/transformers; Ctrl+D now records and transcribes to history"}
+    ]
+  },
+  "current_state": {
+    "ticket": {"id": "", "url": "", "status": ""},
+    "code_review": {"id": "", "url": "", "status": ""},
+    "pipeline": {"name": "", "url": "", "deployed_to": []}
+  },
+  "key_files": {},
+  "references": {},
+  "lessons_learned": []
+}
