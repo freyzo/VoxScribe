@@ -4,7 +4,7 @@ Privacy-first local AI voice dictation with real-time speech-to-text, intelligen
 
 ## Preview
 
-![Wispr Flow Preview](/public/preview.png)
+![VoxScribe Preview](public/VoxScribe.gif)
 
 ## Why This Project
 
