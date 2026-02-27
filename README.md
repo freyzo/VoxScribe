@@ -1,4 +1,4 @@
-# Wispr Flow
+#VoxScribe
 
 Privacy-first local AI voice dictation with real-time speech-to-text, intelligent text editing, and global text injection.
 
@@ -8,7 +8,7 @@ Privacy-first local AI voice dictation with real-time speech-to-text, intelligen
 
 ## Why This Project
 
-I built Wispr Flow because voice input should be private, fast, and work everywhere — without sending your words to the cloud.
+I built VoxScribe because voice input should be private, fast, and work everywhere — without sending your words to the cloud.
 Goal: let users dictate into any app with real-time transcription and AI-powered text cleanup, all running locally.
 
 Context:
