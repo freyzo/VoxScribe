@@ -1,4 +1,4 @@
-#VoxScribe
+# VoxScribe
 
 Privacy-first local AI voice dictation with real-time speech-to-text, intelligent text editing, and global text injection.
 
