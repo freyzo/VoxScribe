@@ -86,15 +86,14 @@ self.onmessage = async (e) => {
           return;
         }
       }
-      const opts = { chunk_length_s: 15, stride_length_s: 5 };
-      if (forceLanguage === "zh") {
-        opts.language = "chinese";
-        opts.task = "transcribe";
-      }
+      const opts = { chunk_length_s: 15, stride_length_s: 5, language: "english", task: "transcribe" };
       const result = await asrPipeline(audio, opts);
       const out = Array.isArray(result) ? result[0] : result;
       let outText = out?.text != null ? String(out.text).trim() : "";
-      if (outText === "[BLANK_AUDIO]" || !outText.replace(/\[\s*BLANK_AUDIO\s*\]/i, "").trim()) {
+      // Filter Whisper hallucinations
+      const hallucinations = /\[\s*(?:BLANK_AUDIO|speaking in [\w\s]+)\s*\]/gi;
+      outText = outText.replace(hallucinations, "").trim();
+      if (!outText) {
         self.postMessage({ type: "transcribeResult", text: "" });
         return;
       }

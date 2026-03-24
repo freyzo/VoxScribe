@@ -4,9 +4,8 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { useAudioEngine } from "@/hooks/use-audio-engine"
 import { useLocalTranscription } from "@/hooks/use-local-transcription"
 import { WaveformVisualizer } from "@/components/waveform-visualizer"
-import type { HistoryEntry } from "@/components/history-panel"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { X, Clock, Copy, Check, Keyboard } from "lucide-react"
+import type { HistoryEntry } from "@/lib/types"
+import { Copy, Check, Clock, Mic, Square, Loader2 } from "lucide-react"
 import { listen } from "@tauri-apps/api/event"
 import { setTrayRecording } from "@/lib/tray"
 import {
@@ -21,11 +20,7 @@ interface HomePageProps {
   sttModel: string
 }
 
-export function HomePage({
-  history,
-  setHistory,
-  sttModel,
-}: HomePageProps) {
+export function HomePage({ history, setHistory, sttModel }: HomePageProps) {
   const resolvedSttModel =
     sttModel === "whisper-small" || sttModel === "whisper-small-multilingual"
       ? "whisper-small-multilingual"
@@ -50,180 +45,153 @@ export function HomePage({
     editMode,
     startTranscription,
     stopTranscription,
-    transcribeAudio,
     processEdit,
     clearTranscript,
     setRawText,
     isModelLoading,
     modelError,
-    loadModel,
   } = useLocalTranscription(resolvedSttModel)
 
-  const [browserSupport, setBrowserSupport] = useState({ audio: false, speech: false })
-  const [showBanner, setShowBanner] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [processingStep, setProcessingStep] = useState<"transcribing" | "translating" | "editing" | null>(null)
+  const [processingStep, setProcessingStep] = useState<"transcribing" | "editing" | null>(null)
   const [processingError, setProcessingError] = useState<string | null>(null)
-  const [isStarting, setIsStarting] = useState(false)
+
+  // Refs for guarding against double-start and stale closures
+  const busyRef = useRef(false)
   const recordingStateRef = useRef(recordingState)
   recordingStateRef.current = recordingState
 
   useEffect(() => {
-    const hasAudio = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia
-    setBrowserSupport({ audio: hasAudio, speech: false }) // We're using local model, not browser speech
-  }, [])
-
-  // Transcription/translation run in a Web Worker so we don't load the heavy model on the main thread (no black screen / freeze).
-
-  // Menu bar tray: show "Listening…" when recording so user has desktop feedback
-  useEffect(() => {
     setTrayRecording(recordingState === "recording")
   }, [recordingState])
 
-  // Preload only Tauri inject API (tiny). Worker+model preload removed: keeping the STT model
-  // in memory caused the app to crash after a few minutes from memory pressure.
   useEffect(() => {
     preloadTauriInject()
   }, [])
 
-  const handleToggleRecording = useCallback(async () => {
-    if (recordingState === "recording") {
+  const doStart = useCallback(async () => {
+    if (busyRef.current || recordingStateRef.current !== "idle") return
+    if (isModelLoading) return
+    busyRef.current = true
+    try {
+      clearTranscript()
+      setProcessingError(null)
+      startTranscription()
+      await startRecording()
+    } catch (error) {
+      console.error("Failed to start recording:", error)
+      setProcessingError(error instanceof Error ? error.message : "Failed to start recording")
+    } finally {
+      busyRef.current = false
+    }
+  }, [isModelLoading, clearTranscript, startTranscription, startRecording])
+
+  const doStop = useCallback(async () => {
+    if (busyRef.current || recordingStateRef.current !== "recording") return
+    busyRef.current = true
+    try {
       stopRecording()
       const audio = getAudioData()
       stopTranscription()
       setProcessingError(null)
 
-      try {
-        if (audio && audio.length > 0) {
-          setProcessingStep("transcribing")
-          let finalText: string
-          try {
-            finalText = await transcribeInWorker(resolvedSttModel, audio)
-          } catch (err) {
-            console.error("Transcription failed:", err)
-            setProcessingError(err instanceof Error ? err.message : "Transcription failed")
-            return
-          }
-
-          if (finalText) {
-            setRawText(finalText)
-
-            setProcessingStep("editing")
-            const edited = await processEdit(finalText)
-            setHistory((prev) => [
-              {
-                id: crypto.randomUUID(),
-                rawText: finalText,
-                editedText: edited,
-                editMode,
-                timestamp: new Date(),
-                sourceLanguage: "en",
-              },
-              ...prev,
-            ])
-            const result = await injectTextIntoActiveApp(edited)
-            if (!result.ok && result.message) setProcessingError(result.message)
-          }
+      if (audio && audio.length > 0) {
+        setProcessingStep("transcribing")
+        let finalText: string
+        try {
+          finalText = await transcribeInWorker(resolvedSttModel, audio)
+        } catch (err) {
+          console.error("Transcription failed:", err)
+          setProcessingError(err instanceof Error ? err.message : "Transcription failed")
+          return
         }
-      } finally {
-        setProcessingStep(null)
-        endProcessing()
-        setTimeout(terminateWorker, 1000)
+
+        if (finalText) {
+          setRawText(finalText)
+          setProcessingStep("editing")
+          const edited = await processEdit(finalText)
+          setHistory((prev) => [
+            {
+              id: crypto.randomUUID(),
+              rawText: finalText,
+              editedText: edited,
+              editMode,
+              timestamp: new Date(),
+              sourceLanguage: "en",
+            },
+            ...prev,
+          ])
+          const result = await injectTextIntoActiveApp(edited)
+          if (!result.ok && result.message) setProcessingError(result.message)
+        }
       }
-    } else if (recordingState === "idle") {
-      if (isModelLoading) {
-        console.log("Model is still loading...")
-        return
-      }
-      clearTranscript()
-      setProcessingError(null)
-      setIsStarting(true)
-      try {
-        startTranscription()
-        await startRecording()
-      } catch (error) {
-        console.error("Failed to start recording:", error)
-        setProcessingError(error instanceof Error ? error.message : "Failed to start recording")
-      } finally {
-        setIsStarting(false)
-      }
+    } finally {
+      setProcessingStep(null)
+      endProcessing()
+      busyRef.current = false
+      // Terminate worker after a delay to free memory
+      setTimeout(terminateWorker, 1000)
     }
   }, [
-    recordingState,
-    isModelLoading,
     resolvedSttModel,
-    startRecording,
     stopRecording,
     getAudioData,
-    startTranscription,
     stopTranscription,
     processEdit,
     editMode,
-    clearTranscript,
     setRawText,
     setHistory,
     endProcessing,
   ])
 
+  // Keyboard: hold Ctrl+D to record, release to stop
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable
-
-      // Ctrl+D for dictation - start on key down
-      if (e.ctrlKey && e.key === "d" && !isInput) {
+      if (e.ctrlKey && e.key === "d" && !e.repeat) {
+        const target = e.target as HTMLElement
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return
         e.preventDefault()
-        if (recordingState === "idle") {
-          handleToggleRecording()
-        }
+        doStart()
       }
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable
-
-      // Stop dictation when either Ctrl or D is released (more reliable than only checking Ctrl)
-      if (recordingState === "recording" && !isInput && (e.key === "d" || e.key === "D" || e.key === "Control")) {
+      if (recordingStateRef.current !== "recording") return
+      if (e.key === "d" || e.key === "D" || e.key === "Control") {
         e.preventDefault()
-        handleToggleRecording()
+        doStop()
       }
     }
 
     window.addEventListener("keydown", handleKeyDown)
     window.addEventListener("keyup", handleKeyUp)
-
     return () => {
       window.removeEventListener("keydown", handleKeyDown)
       window.removeEventListener("keyup", handleKeyUp)
     }
-  }, [handleToggleRecording, recordingState])
+  }, [doStart, doStop])
 
-  // Listen for tray + global shortcut: start_dictation = toggle; stop_dictation = release to stop (global only)
+  // Tauri tray/global shortcut events
   useEffect(() => {
     let unlistenStart: (() => void) | null = null
     let unlistenStop: (() => void) | null = null
 
-    const setupListeners = async () => {
+    const setup = async () => {
       try {
         unlistenStart = await listen("start_dictation", () => {
-          handleToggleRecording()
+          if (recordingStateRef.current === "idle") doStart()
+          else if (recordingStateRef.current === "recording") doStop()
         })
         unlistenStop = await listen("stop_dictation", () => {
-          if (recordingStateRef.current === "recording") handleToggleRecording()
+          if (recordingStateRef.current === "recording") doStop()
         })
-      } catch (error) {
-        console.log("Tauri not available, skipping tray/shortcut listeners")
+      } catch {
+        // Not in Tauri
       }
     }
-
-    setupListeners()
-
-    return () => {
-      unlistenStart?.()
-      unlistenStop?.()
-    }
-  }, [handleToggleRecording])
+    setup()
+    return () => { unlistenStart?.(); unlistenStop?.() }
+  }, [doStart, doStop])
 
   const handleCopy = async (text: string, id: string) => {
     await navigator.clipboard.writeText(text)
@@ -231,203 +199,141 @@ export function HomePage({
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // Group history by date
-  const groupedHistory = history.reduce<Record<string, HistoryEntry[]>>((groups, entry) => {
-    const now = new Date()
-    const entryDate = new Date(entry.timestamp)
-    const diffDays = Math.floor((now.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24))
+  const isIdle = recordingState === "idle" && !processingStep
+  const isRecording = recordingState === "recording"
+  const isProcessing = !!processingStep
 
-    let label: string
-    if (diffDays === 0) {
-      label = "TODAY"
-    } else if (diffDays === 1) {
-      label = "YESTERDAY"
-    } else {
-      label = entryDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase()
-    }
-
-    if (!groups[label]) groups[label] = []
-    groups[label].push(entry)
-    return groups
-  }, {})
+  const statusText = isModelLoading
+    ? "Loading model..."
+    : isRecording
+      ? `Listening... ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, "0")}`
+      : processingStep === "transcribing"
+        ? "Transcribing..."
+        : processingStep === "editing"
+          ? "Editing..."
+          : "Hold Ctrl+D to dictate"
 
   return (
-    <ScrollArea className="h-full min-h-0 flex-1">
-      <div className="mx-auto min-h-full max-w-[860px] px-8 py-8">
-        {/* Header */}
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground text-balance">
-            Welcome back
-          </h1>
+    <div className="flex h-full flex-col">
+      {/* Main area */}
+      <div className="flex flex-1 flex-col items-center justify-center gap-6 px-8">
+        {/* Mic button + waveform */}
+        <div className="relative flex flex-col items-center gap-4">
+          {/* Waveform behind mic */}
+          {isRecording && (
+            <div className="absolute -inset-8 opacity-60">
+              <WaveformVisualizer
+                levels={audioLevels}
+                isRecording={true}
+                variant="wave"
+              />
+            </div>
+          )}
+
+          {/* Mic button */}
+          <button
+            onClick={() => {
+              if (isRecording) doStop()
+              else if (isIdle) doStart()
+            }}
+            disabled={isProcessing || isModelLoading}
+            className={`relative z-10 flex size-20 items-center justify-center rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              isRecording
+                ? "bg-red-500/90 text-white shadow-lg shadow-red-500/20"
+                : isProcessing
+                  ? "bg-muted text-muted-foreground cursor-not-allowed"
+                  : "bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
+            }`}
+            aria-label={isRecording ? "Stop recording" : "Start recording"}
+          >
+            {isProcessing ? (
+              <Loader2 className="size-7 animate-spin" />
+            ) : isRecording ? (
+              <Square className="size-6" fill="currentColor" />
+            ) : (
+              <Mic className="size-7" />
+            )}
+          </button>
+
+          {/* Glow ring */}
+          {isRecording && (
+            <div
+              className="absolute z-0 rounded-full bg-red-500/10 animate-pulse"
+              style={{
+                width: `${100 + audioLevel * 60}px`,
+                height: `${100 + audioLevel * 60}px`,
+              }}
+            />
+          )}
         </div>
 
-        {/* Recording banner / CTA */}
-        {showBanner && (
-          <div className="relative mt-6 overflow-hidden rounded-xl border border-border bg-banner p-6">
-            <button
-              onClick={() => setShowBanner(false)}
-              className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"
-              aria-label="Dismiss banner"
-            >
-              <X className="size-5" />
-            </button>
-            <div className="flex items-center gap-8">
-              <div className="flex flex-1 flex-col gap-3">
-                <h2 className="text-xl font-semibold text-banner-foreground text-pretty">
-                  Start dictating anywhere
-                </h2>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  <strong>Hold</strong> <kbd className="rounded border border-border bg-muted px-1 font-mono text-xs">Ctrl+D</kbd> to record; <strong>release</strong> to stop and paste. Text is always typed into the active app (Notes, Terminal, etc.). Or click the mic / tray to toggle.
-                </p>
-                <div className="flex items-center gap-3 pt-1">
-                  <Keyboard className="size-4 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Text is typed into the focused app when you stop.</span>
-                </div>
-                {isModelLoading && (
-                  <p className="text-xs text-blue-400">
-                    Loading {sttModel} model... This may take a moment.
-                  </p>
-                )}
-                {modelError && (
-                  <p className="text-xs text-red-400">
-                    Model error: {modelError}
-                  </p>
-                )}
-                <div className="flex items-center gap-4 pt-2">
-                  <div className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-foreground">
-                      {recordingState === "idle"
-                        ? isModelLoading ? "Loading model..." : "Press Ctrl+D to start (works in any app)"
-                        : isStarting
-                          ? "Starting…"
-                          : recordingState === "recording"
-                            ? "Listening… (release Ctrl+D to stop)"
-                            : processingStep === "transcribing"
-                              ? "Transcribing… (may take 30–60 sec)"
-                              : processingStep === "translating"
-                              ? "Translating to English…"
-                              : processingStep === "editing"
-                                ? "Editing…"
-                                : "Processing..."}
-                    </span>
-                    {recordingState === "recording" && (
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {Math.floor(duration / 60)}:{(duration % 60).toString().padStart(2, "0")}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {/* Waveform */}
-              <div className="hidden h-16 w-48 md:block">
-                <WaveformVisualizer
-                  levels={audioLevels}
-                  isRecording={recordingState === "recording"}
-                  variant="bars"
-                />
-              </div>
-            </div>
-          </div>
+        {/* Status */}
+        <p className={`text-sm ${isRecording ? "text-red-400 font-medium" : "text-muted-foreground"}`}>
+          {statusText}
+        </p>
+
+        {/* Error */}
+        {(audioError || processingError || modelError) && (
+          <p className="max-w-md text-center text-xs text-red-400">
+            {processingError ?? modelError ?? audioError}
+          </p>
         )}
 
-        {/* Error display */}
-        {(audioError || processingError) && (
-          <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <p className="text-sm text-destructive">{processingError ?? audioError}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              You can try again after model loading is complete.
-            </p>
-          </div>
-        )}
-
-        {/* Interim transcription - scrollable when long */}
-        {(interimText || (rawText && recordingState === "recording")) && (
-          <div className="mt-4 max-h-48 overflow-y-auto rounded-lg border border-border bg-card p-4">
+        {/* Current transcription */}
+        {(interimText || (rawText && isRecording)) && (
+          <div className="w-full max-w-lg rounded-lg border border-border bg-card p-4">
             <p className="text-sm leading-relaxed text-foreground">
               {rawText}
-              {interimText && (
-                <span className="text-muted-foreground italic">{interimText}</span>
-              )}
+              {interimText && <span className="text-muted-foreground italic">{interimText}</span>}
             </p>
           </div>
         )}
 
-        {/* Latest edited text - scrollable when long */}
-        {editedText && recordingState !== "recording" && (
-          <div className="mt-4 flex max-h-48 flex-col gap-3 overflow-y-auto rounded-lg border border-border bg-card p-4">
-            <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm leading-relaxed text-foreground">{editedText}</p>
-              </div>
-              <button
-                onClick={() => handleCopy(editedText, "latest")}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-                aria-label="Copy text"
-              >
-                {copiedId === "latest" ? <Check className="size-4" /> : <Copy className="size-4" />}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* History */}
-        {Object.keys(groupedHistory).length > 0 && (
-          <div className="mt-10 flex flex-col gap-8">
-            {Object.entries(groupedHistory).map(([dateLabel, entries]) => (
-              <div key={dateLabel}>
-                <p className="mb-4 text-xs font-semibold tracking-widest text-muted-foreground">
-                  {dateLabel}
-                </p>
-                <div className="flex flex-col gap-0">
-                  {entries.map((entry, index) => {
-                    const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                    const displayText = entry.editedText || entry.rawText
-                    return (
-                      <div
-                        key={`${dateLabel}-${entry.id}-${index}`}
-                        className="flex gap-6 border-t border-border py-5"
-                      >
-                        <div className="flex items-start gap-1.5 pt-0.5 text-sm text-muted-foreground shrink-0 w-20">
-                          <Clock className="size-3.5 mt-0.5" />
-                          <span>{timeStr}</span>
-                        </div>
-                        <div className="flex min-w-0 flex-1 flex-col gap-2">
-                          <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-                            <p className="max-h-32 min-w-0 flex-1 overflow-y-auto text-sm leading-relaxed text-foreground">
-                              {displayText}
-                            </p>
-                            <button
-                              onClick={() => handleCopy(displayText, entry.id)}
-                              className="shrink-0 text-muted-foreground hover:text-foreground"
-                            >
-                              {copiedId === entry.id ? <Check className="size-4" /> : <Copy className="size-4" />}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Empty state */}
-        {history.length === 0 && (
-          <div className="mt-16 flex flex-col items-center justify-center gap-3 text-center">
-            <div className="size-12 rounded-full bg-muted flex items-center justify-center">
-              <Clock className="size-5 text-muted-foreground" />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Your dictation history will appear here
-            </p>
+        {/* Latest result */}
+        {editedText && !isRecording && !isProcessing && (
+          <div className="flex w-full max-w-lg items-start gap-3 rounded-lg border border-border bg-card p-4">
+            <p className="flex-1 text-sm leading-relaxed text-foreground">{editedText}</p>
+            <button
+              onClick={() => handleCopy(editedText, "latest")}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Copy text"
+            >
+              {copiedId === "latest" ? <Check className="size-4" /> : <Copy className="size-4" />}
+            </button>
           </div>
         )}
       </div>
-    </ScrollArea>
+
+      {/* History — compact bottom section */}
+      {history.length > 0 && (
+        <div className="border-t border-border px-8 py-4 max-h-[35vh] overflow-y-auto">
+          <p className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase">History</p>
+          <div className="flex flex-col gap-0">
+            {history.slice(0, 20).map((entry) => {
+              const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+              const displayText = entry.editedText || entry.rawText
+              return (
+                <div key={entry.id} className="flex gap-4 border-t border-border/50 py-3 first:border-t-0">
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0 w-16">
+                    <Clock className="size-3" />
+                    {timeStr}
+                  </span>
+                  <p className="flex-1 text-sm leading-relaxed text-foreground line-clamp-2">{displayText}</p>
+                  <button
+                    onClick={() => handleCopy(displayText, entry.id)}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    {copiedId === entry.id ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
