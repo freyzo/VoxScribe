@@ -10,14 +10,13 @@ self.onerror = function (ev) {
 };
 
 const STT_MODEL_IDS = {
-  // Route legacy English-only ids to multilingual models to avoid
-  // "[speaking in foreign language]" outputs on non-English speech.
+  // Use whisper-tiny for all variants — fastest model, good enough for English
   "whisper-tiny": "Xenova/whisper-tiny",
   "whisper-base": "Xenova/whisper-tiny",
-  "whisper-small": "Xenova/whisper-small",
-  "whisper-medium": "Xenova/whisper-small",
+  "whisper-small": "Xenova/whisper-tiny",
+  "whisper-medium": "Xenova/whisper-tiny",
   "whisper-tiny-multilingual": "Xenova/whisper-tiny",
-  "whisper-small-multilingual": "Xenova/whisper-small",
+  "whisper-small-multilingual": "Xenova/whisper-tiny",
 };
 
 function collapseRepetition(text) {
@@ -86,7 +85,7 @@ self.onmessage = async (e) => {
           return;
         }
       }
-      const opts = { chunk_length_s: 15, stride_length_s: 5, language: "english", task: "transcribe" };
+      const opts = { chunk_length_s: 10, stride_length_s: 3, language: "english", task: "transcribe" };
       const result = await asrPipeline(audio, opts);
       const out = Array.isArray(result) ? result[0] : result;
       let outText = out?.text != null ? String(out.text).trim() : "";
