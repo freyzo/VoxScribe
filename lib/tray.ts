@@ -25,7 +25,7 @@ export async function initTray(): Promise<void> {
     const menu = await Menu.new({
       items: [
         { id: "dictation", text: "Dictation: hold Ctrl+D to record, release to stop", action: () => emit("start_dictation") },
-        { id: "show", text: "Show VoxScribe", action: () => getCurrentWindow().show().then(() => getCurrentWindow().setFocus(true)) },
+        { id: "show", text: "Show VoxScribe", action: () => getCurrentWindow().show().then(() => getCurrentWindow().setFocus()) },
         { id: "quit", text: "Quit VoxScribe", action: () => import("@tauri-apps/api/core").then(({ invoke }) => invoke("exit_app")) },
       ],
     })

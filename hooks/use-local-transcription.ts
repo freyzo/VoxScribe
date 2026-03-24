@@ -1,40 +1,9 @@
 "use client"
 
 import { useState, useCallback, useRef } from "react"
-// Lazy-load transformers only when loadModel/transcribeAudio is used (home uses worker, so main thread never loads this).
 
 export type EditMode = "raw" | "light" | "aggressive"
 export type Tone = "casual" | "professional" | "concise"
-
-interface SpeechRecognitionEvent {
-  resultIndex: number
-  results: SpeechRecognitionResultList
-}
-
-interface SpeechRecognitionErrorEvent {
-  error: string
-  message: string
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean
-  interimResults: boolean
-  lang: string
-  start(): void
-  stop(): void
-  abort(): void
-  onresult: ((event: SpeechRecognitionEvent) => void) | null
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
-  onend: (() => void) | null
-  onstart: (() => void) | null
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognition
-    webkitSpeechRecognition: new () => SpeechRecognition
-  }
-}
 
 export interface LocalTranscriptionState {
   rawText: string
@@ -52,7 +21,6 @@ export interface LocalTranscriptionState {
 export interface LocalTranscriptionActions {
   startTranscription: () => void
   stopTranscription: () => string
-  transcribeAudio: (audio: Float32Array) => Promise<string>
   setEditMode: (mode: EditMode) => void
   setTone: (tone: Tone) => void
   setCustomPrompt: (prompt: string) => void
@@ -63,35 +31,12 @@ export interface LocalTranscriptionActions {
   loadModel: (modelId: string) => Promise<void>
 }
 
-const STT_MODEL_IDS: Record<string, string> = {
-  "whisper-tiny": "Xenova/whisper-tiny.en",
-  "whisper-base": "Xenova/whisper-base.en",
-  "whisper-small": "Xenova/whisper-small.en",
-  "whisper-medium": "Xenova/whisper-medium.en",
-  // Multilingual (no .en) — use for Mandarin/Chinese input
-  "whisper-tiny-multilingual": "Xenova/whisper-tiny",
-  "whisper-small-multilingual": "Xenova/whisper-small",
-}
-
-/** Collapse Whisper repetition/hallucination (e.g. "no, no, no, no" -> "no") */
-function collapseRepetition(text: string): string {
-  if (!text.trim()) return text
-  let out = text.trim()
-  // Collapse repeated words (same word 3+ times in a row, with optional commas/spaces)
-  out = out.replace(/\b(\w+(?:'\w+)?)(?:\s*,\s*\1\s*|\s+\1\s*){2,}/gi, "$1 ")
-  // Collapse repeated phrases (2–4 words repeated)
-  out = out.replace(/((?:\b\w+(?:'\w+)?\s*){1,4})(?:\s*,\s*|\s+)(\1\s*){2,}/gi, (_, phrase) => phrase.trim() + " ")
-  return out.replace(/\s{2,}/g, " ").trim()
-}
-
 function applyLightEdit(text: string): string {
   if (!text.trim()) return text
 
-  // Capitalize first letter of sentences
   let result = text.trim()
   result = result.charAt(0).toUpperCase() + result.slice(1)
 
-  // Fix common speech patterns
   result = result
     .replace(/\s+/g, " ")
     .replace(/\s,/g, ",")
@@ -127,96 +72,16 @@ function applyLightEdit(text: string): string {
     .replace(/\bbasically\b/gi, "")
     .replace(/\s{2,}/g, " ")
 
-  // Add period at end if missing
   if (result && !/[.!?]$/.test(result)) {
     result += "."
   }
 
-  // Capitalize after periods
   result = result.replace(/\.\s+([a-z])/g, (_, letter) => `. ${letter.toUpperCase()}`)
 
   return result.trim()
 }
 
-function applyAggressiveRewrite(text: string, tone: Tone): string {
-  let result = applyLightEdit(text)
-
-  // Remove filler phrases
-  const fillerPhrases = [
-    /\bso basically\b/gi,
-    /\bi mean\b/gi,
-    /\byou know what I mean\b/gi,
-    /\bkind of\b/gi,
-    /\bsort of\b/gi,
-    /\bto be honest\b/gi,
-    /\bhonestly\b/gi,
-    /\bliterally\b/gi,
-    /\bactually\b/gi,
-    /\bI think that\b/gi,
-    /\bI feel like\b/gi,
-    /\bI guess\b/gi,
-    /\band stuff\b/gi,
-    /\bor something\b/gi,
-    /\bor whatever\b/gi,
-    /\byeah so\b/gi,
-    /\banyway\b/gi,
-    /\banyways\b/gi,
-  ]
-
-  for (const filler of fillerPhrases) {
-    result = result.replace(filler, "")
-  }
-
-  // Clean up whitespace
-  result = result.replace(/\s{2,}/g, " ").trim()
-
-  // Tone adjustments
-  switch (tone) {
-    case "professional":
-      result = result
-        .replace(/\bgot\b/g, "received")
-        .replace(/\bget\b/g, "obtain")
-        .replace(/\bbig\b/g, "significant")
-        .replace(/\bgood\b/g, "excellent")
-        .replace(/\bbad\b/g, "unfavorable")
-        .replace(/\bthing\b/g, "matter")
-        .replace(/\bthings\b/g, "matters")
-        .replace(/\bneed to\b/g, "should")
-        .replace(/\bwant to\b/g, "would like to")
-        .replace(/\ba lot of\b/g, "numerous")
-        .replace(/\bfigure out\b/g, "determine")
-      break
-    case "concise":
-      result = result
-        .replace(/\bin order to\b/g, "to")
-        .replace(/\bdue to fact that\b/g, "because")
-        .replace(/\bat this point in time\b/g, "now")
-        .replace(/\bin event that\b/g, "if")
-        .replace(/\bfor purpose of\b/g, "to")
-        .replace(/\bwith regard to\b/g, "about")
-        .replace(/\bin spite of\b/g, "despite")
-        .replace(/\bit is important to note that\b/g, "")
-        .replace(/\bit should be noted that\b/g, "")
-      break
-    case "casual":
-    default:
-      break
-  }
-
-  // Recapitalize
-  if (result) {
-    result = result.charAt(0).toUpperCase() + result.slice(1)
-    result = result.replace(/\.\s+([a-z])/g, (_, letter) => `. ${letter.toUpperCase()}`)
-  }
-
-  if (result && !/[.!?]$/.test(result)) {
-    result += "."
-  }
-
-  return result.replace(/\s{2,}/g, " ").trim()
-}
-
-export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTranscriptionState & LocalTranscriptionActions {
+export function useLocalTranscription(_modelId: string = "whisper-tiny"): LocalTranscriptionState & LocalTranscriptionActions {
   const [rawText, setRawText] = useState("")
   const [editedText, setEditedText] = useState("")
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -225,38 +90,14 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
   const [editMode, setEditMode] = useState<EditMode>("light")
   const [tone, setTone] = useState<Tone>("professional")
   const [customPrompt, setCustomPrompt] = useState("")
-  const [isModelLoading, setIsModelLoading] = useState(false)
+  const [isModelLoading] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
   const finalTranscriptRef = useRef("")
-  const pipelineRef = useRef<((audio: Float32Array, opts: object) => Promise<unknown>) | null>(null)
-  const currentModelIdRef = useRef<string>("")
 
-  const loadModel = useCallback(async (modelId: string) => {
-    const hfModelId = STT_MODEL_IDS[modelId] ?? STT_MODEL_IDS["whisper-tiny"]
-    if (pipelineRef.current && currentModelIdRef.current === modelId) return
-
-    setIsModelLoading(true)
-    setModelError(null)
-
-    try {
-      const { pipeline } = await import("@huggingface/transformers")
-      console.log(`Loading STT model: ${modelId} (${hfModelId})`)
-      const pipe = await pipeline("automatic-speech-recognition", hfModelId, {
-        progress_callback: (progress: { progress?: number }) => {
-          if (progress?.progress != null) console.log("Model load progress:", Math.round(progress.progress * 100), "%")
-        },
-      })
-      pipelineRef.current = pipe as (audio: Float32Array, opts: object) => Promise<unknown>
-      currentModelIdRef.current = modelId
-      console.log("STT model loaded successfully")
-    } catch (error) {
-      console.error("Failed to load STT model:", error)
-      setModelError(error instanceof Error ? error.message : "Failed to load model")
-    } finally {
-      setIsModelLoading(false)
-    }
+  // Model loading is handled by the Web Worker, not the main thread.
+  const loadModel = useCallback(async (_modelId: string) => {
+    // no-op: worker handles model loading
   }, [])
 
   const startTranscription = useCallback(() => {
@@ -267,40 +108,10 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
   }, [])
 
   const stopTranscription = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-      recognitionRef.current = null
-    }
     setIsTranscribing(false)
     setInterimText("")
     return ""
   }, [])
-
-  const transcribeAudio = useCallback(
-    async (audio: Float32Array): Promise<string> => {
-      if (!pipelineRef.current) {
-        await loadModel(modelId)
-        if (!pipelineRef.current) return ""
-      }
-      try {
-        const result = await pipelineRef.current(audio, { chunk_length_s: 30, stride_length_s: 5 })
-        const out = Array.isArray(result) ? result[0] : result
-        let text = out?.text != null ? String(out.text).trim() : ""
-        // Whisper returns [BLANK_AUDIO] for silent or undetectable speech — treat as empty
-        if (text === "[BLANK_AUDIO]" || !text.replace(/\[\s*BLANK_AUDIO\s*\]/i, "").trim()) {
-          setModelError("No speech detected. Try speaking again.")
-          return ""
-        }
-        setModelError(null)
-        return collapseRepetition(text)
-      } catch (error) {
-        console.error("Transcription error:", error)
-        setModelError(error instanceof Error ? error.message : "Transcription failed")
-        return ""
-      }
-    },
-    [modelId, loadModel]
-  )
 
   const processEdit = useCallback(
     async (text: string): Promise<string> => {
@@ -311,22 +122,12 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
       }
 
       setIsEditing(true)
-
-      // MVP: no artificial delay — keep latency low until text shows in other apps
-      // await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 400))
-
-      let result: string
-      if (editMode === "light") {
-        result = applyLightEdit(text)
-      } else {
-        result = applyAggressiveRewrite(text, tone)
-      }
-
+      const result = applyLightEdit(text)
       setEditedText(result)
       setIsEditing(false)
       return result
     },
-    [editMode, tone]
+    [editMode]
   )
 
   const clearTranscript = useCallback(() => {
@@ -349,7 +150,6 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
     modelError,
     startTranscription,
     stopTranscription,
-    transcribeAudio,
     setEditMode,
     setTone,
     setCustomPrompt,
