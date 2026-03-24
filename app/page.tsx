@@ -7,19 +7,9 @@ import { DictionaryPage, type DictionaryWord } from "@/components/dictionary-pag
 import { StylePage } from "@/components/style-page"
 import { ModelsPage } from "@/components/models-page"
 import { AppErrorBoundary } from "@/components/error-boundary"
-import type { HistoryEntry } from "@/components/history-panel"
+import type { HistoryEntry, SourceLanguage } from "@/components/history-panel"
 import type { EditMode, Tone } from "@/hooks/use-transcription"
-
-const defaultWords: DictionaryWord[] = [
-  { id: "1", word: "7z", type: "learned", createdAt: new Date() },
-  { id: "2", word: "do.now", type: "learned", createdAt: new Date() },
-  { id: "3", word: "lexa", type: "learned", createdAt: new Date() },
-  { id: "4", word: "grep", type: "learned", createdAt: new Date() },
-  { id: "5", word: "github", type: "learned", createdAt: new Date() },
-  { id: "6", word: "kubectl", type: "learned", createdAt: new Date() },
-  { id: "7", word: "Vercel", type: "manual", createdAt: new Date() },
-  { id: "8", word: "Next.js", type: "manual", createdAt: new Date() },
-]
+import { dbDictList, dbDictAdd, dbDictDelete, dbHistoryList } from "@/lib/db"
 
 export default function FlowApp() {
   const [activePage, setActivePage] = useState<PageId>("home")
@@ -33,7 +23,7 @@ export default function FlowApp() {
   const [history, setHistory] = useState<HistoryEntry[]>([])
 
   // Dictionary state
-  const [words, setWords] = useState<DictionaryWord[]>(defaultWords)
+  const [words, setWords] = useState<DictionaryWord[]>([])
 
   // Style settings
   const [editMode, setEditMode] = useState<EditMode>("light")
@@ -43,20 +33,57 @@ export default function FlowApp() {
   const [llmModel, setLlmModel] = useState("phi-3-mini")
   const [editStrength, setEditStrength] = useState(50)
 
+  // Load dictionary + history from SQLite on mount
+  useEffect(() => {
+    dbDictList()
+      .then((rows) => {
+        setWords(
+          rows.map((r) => ({
+            id: String(r.id),
+            word: r.word,
+            type: r.type as "manual" | "learned",
+            createdAt: new Date(r.createdAt),
+          }))
+        )
+      })
+      .catch(() => {}) // not in Tauri — keep empty
+
+    dbHistoryList(200)
+      .then((rows) => {
+        setHistory(
+          rows.map((r) => ({
+            id: String(r.id),
+            rawText: r.rawText,
+            editedText: r.editedText,
+            editMode: r.editMode as EditMode,
+            timestamp: new Date(r.timestamp),
+            sourceLanguage: r.sourceLanguage as SourceLanguage,
+          }))
+        )
+      })
+      .catch(() => {})
+  }, [])
+
   const handleAddWord = useCallback((word: string) => {
+    // Optimistic update + persist to DB
+    const tempId = Date.now().toString()
     setWords((prev) => [
-      {
-        id: Date.now().toString(),
-        word,
-        type: "manual",
-        createdAt: new Date(),
-      },
+      { id: tempId, word, type: "manual", createdAt: new Date() },
       ...prev,
     ])
+    dbDictAdd(word, "manual")
+      .then((row) => {
+        // Replace temp id with real DB id
+        setWords((prev) =>
+          prev.map((w) => (w.id === tempId ? { ...w, id: String(row.id) } : w))
+        )
+      })
+      .catch(() => {})
   }, [])
 
   const handleDeleteWord = useCallback((id: string) => {
     setWords((prev) => prev.filter((w) => w.id !== id))
+    dbDictDelete(Number(id)).catch(() => {})
   }, [])
 
   return (
@@ -70,6 +97,7 @@ export default function FlowApp() {
             history={history}
             setHistory={setHistory}
             sttModel={sttModel}
+            dictionaryWords={words}
           />
         )}
 

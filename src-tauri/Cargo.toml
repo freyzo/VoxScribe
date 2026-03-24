@@ -26,3 +26,4 @@ tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
 arboard = "3.4"
 enigo = "0.2"
+rusqlite = { version = "0.31", features = ["bundled"] }

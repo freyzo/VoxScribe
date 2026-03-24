@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { useAudioEngine } from "@/hooks/use-audio-engine"
 import { useLocalTranscription } from "@/hooks/use-local-transcription"
 import { WaveformVisualizer } from "@/components/waveform-visualizer"
-import type { HistoryEntry } from "@/components/history-panel"
+import type { HistoryEntry, SourceLanguage } from "@/components/history-panel"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { X, Clock, Copy, Check, Keyboard } from "lucide-react"
 import { listen } from "@tauri-apps/api/event"
@@ -14,17 +14,37 @@ import {
   preloadWorker,
 } from "@/lib/transcription-worker-client"
 import { injectTextIntoActiveApp, preloadTauriInject, isRunningInTauri } from "@/lib/inject-text"
+import { dbHistoryAdd } from "@/lib/db"
 
 interface HomePageProps {
   history: HistoryEntry[]
   setHistory: React.Dispatch<React.SetStateAction<HistoryEntry[]>>
   sttModel: string
+  dictionaryWords?: { word: string }[]
+}
+
+/** Apply dictionary replacements (e.g. "Whispr -> Wispr" entries) */
+function applyDictionary(text: string, words: { word: string }[]): string {
+  let result = text
+  for (const { word } of words) {
+    // Support "from -> to" syntax
+    const arrow = word.indexOf("->")
+    if (arrow !== -1) {
+      const from = word.slice(0, arrow).trim()
+      const to = word.slice(arrow + 2).trim()
+      if (from && to) {
+        result = result.replace(new RegExp(`\\b${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "gi"), to)
+      }
+    }
+  }
+  return result
 }
 
 export function HomePage({
   history,
   setHistory,
   sttModel,
+  dictionaryWords = [],
 }: HomePageProps) {
   const resolvedSttModel =
     sttModel === "whisper-small" || sttModel === "whisper-small-multilingual"
@@ -117,20 +137,30 @@ export function HomePage({
         }
 
         if (finalText) {
+          // Apply dictionary replacements before editing
+          finalText = applyDictionary(finalText, dictionaryWords)
           setRawText(finalText)
           setProcessingStep("editing")
           const edited = await processEdit(finalText)
-          setHistory((prev) => [
-            {
-              id: crypto.randomUUID(),
-              rawText: finalText,
-              editedText: edited,
-              editMode,
-              timestamp: new Date(),
-              sourceLanguage: "en",
-            },
-            ...prev,
-          ])
+
+          // Persist to SQLite, use DB id if available
+          const tempId = crypto.randomUUID()
+          const entry = {
+            id: tempId,
+            rawText: finalText,
+            editedText: edited,
+            editMode,
+            timestamp: new Date(),
+            sourceLanguage: "en" as SourceLanguage,
+          }
+          setHistory((prev) => [entry, ...prev])
+          dbHistoryAdd(finalText, edited, editMode, "en")
+            .then((row) => {
+              setHistory((prev) =>
+                prev.map((h) => (h.id === tempId ? { ...h, id: String(row.id) } : h))
+              )
+            })
+            .catch(() => {})
 
           console.log("[VoxScribe] Injecting text into active app:", edited.slice(0, 50))
           const result = await injectTextIntoActiveApp(edited)

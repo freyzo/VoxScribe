@@ -1,3 +1,5 @@
+mod db;
+
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -77,16 +79,62 @@ fn inject_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
   Ok(())
 }
 
+// --- Dictionary commands ---
+#[tauri::command]
+fn dict_list(app: tauri::AppHandle) -> Result<Vec<db::DictionaryWord>, String> {
+  let db = app.state::<db::Db>();
+  db.list_words()
+}
+
+#[tauri::command]
+fn dict_add(app: tauri::AppHandle, word: String, word_type: Option<String>) -> Result<db::DictionaryWord, String> {
+  let db = app.state::<db::Db>();
+  db.add_word(&word, word_type.as_deref().unwrap_or("manual"))
+}
+
+#[tauri::command]
+fn dict_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+  let db = app.state::<db::Db>();
+  db.delete_word(id)
+}
+
+// --- History commands ---
+#[tauri::command]
+fn history_list(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<db::HistoryEntry>, String> {
+  let db = app.state::<db::Db>();
+  db.list_history(limit.unwrap_or(200))
+}
+
+#[tauri::command]
+fn history_add(app: tauri::AppHandle, raw_text: String, edited_text: String, edit_mode: String, source_language: Option<String>) -> Result<db::HistoryEntry, String> {
+  let db = app.state::<db::Db>();
+  db.add_history(&raw_text, &edited_text, &edit_mode, source_language.as_deref().unwrap_or("en"))
+}
+
+#[tauri::command]
+fn history_delete(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+  let db = app.state::<db::Db>();
+  db.delete_history(id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-    .invoke_handler(tauri::generate_handler![get_tray_icon_path, exit_app, inject_text])
+    .invoke_handler(tauri::generate_handler![
+      get_tray_icon_path, exit_app, inject_text,
+      dict_list, dict_add, dict_delete,
+      history_list, history_add, history_delete,
+    ])
     .setup(|app| {
       // macOS: run as "accessory" so we don't steal focus when the user presses the global hotkey
-      // from Notes/other apps. Paste then goes to the app that still has focus.
       #[cfg(target_os = "macos")]
       let _ = app.handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+      // Initialize SQLite database
+      let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+      let database = db::Db::open(app_data).map_err(|e| e.to_string())?;
+      app.manage(database);
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
