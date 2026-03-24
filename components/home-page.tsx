@@ -11,7 +11,7 @@ import { listen } from "@tauri-apps/api/event"
 import { setTrayRecording } from "@/lib/tray"
 import {
   transcribeInWorker,
-  terminateWorker,
+  preloadWorker,
 } from "@/lib/transcription-worker-client"
 import { injectTextIntoActiveApp, preloadTauriInject, isRunningInTauri } from "@/lib/inject-text"
 
@@ -74,7 +74,9 @@ export function HomePage({
 
   useEffect(() => {
     preloadTauriInject()
-  }, [])
+    // Preload worker + Whisper model so first dictation is instant
+    preloadWorker(resolvedSttModel)
+  }, [resolvedSttModel])
 
   const doStart = useCallback(async () => {
     if (busyRef.current || recordingStateRef.current !== "idle") return
@@ -145,7 +147,7 @@ export function HomePage({
       setProcessingStep(null)
       endProcessing()
       busyRef.current = false
-      setTimeout(terminateWorker, 1000)
+      // Don't terminate worker — keep model in memory for instant next dictation
     }
   }, [
     resolvedSttModel,

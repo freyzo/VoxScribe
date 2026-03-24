@@ -89,9 +89,14 @@ self.onmessage = async (e) => {
       const result = await asrPipeline(audio, opts);
       const out = Array.isArray(result) ? result[0] : result;
       let outText = out?.text != null ? String(out.text).trim() : "";
-      // Filter Whisper hallucinations
-      const hallucinations = /\[\s*(?:BLANK_AUDIO|speaking in [\w\s]+)\s*\]/gi;
-      outText = outText.replace(hallucinations, "").trim();
+      // Filter Whisper hallucinations and non-speech annotations
+      // Brackets: [BLANK_AUDIO], [speaking in foreign language], etc.
+      outText = outText.replace(/\[\s*(?:BLANK_AUDIO|speaking in [\w\s]+)\s*\]/gi, "");
+      // Parenthetical sound descriptions: (coughs), (coughing), (sighs), (music), (laughs), (applause), etc.
+      outText = outText.replace(/\(\s*[\w\s]+(?:ing|s|ed|tion|ture)?\s*\)\s*\.?\s*/gi, "");
+      // Common Whisper junk outputs
+      outText = outText.replace(/^\s*(?:you|thank you|thanks for watching|subscribe)\.?\s*$/gi, "");
+      outText = outText.trim();
       if (!outText) {
         self.postMessage({ type: "transcribeResult", text: "" });
         return;

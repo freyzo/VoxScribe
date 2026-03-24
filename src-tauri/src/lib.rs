@@ -38,7 +38,7 @@ fn inject_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
   let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
   let saved = clipboard.get_text().ok();
   clipboard.set_text(text.clone()).map_err(|e| e.to_string())?;
-  thread::sleep(Duration::from_millis(20));
+  thread::sleep(Duration::from_millis(5));
 
   // Hide our window so the app that had focus (e.g. Notes) gets it back and receives the paste.
   let main = app
@@ -47,7 +47,7 @@ fn inject_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
   let was_visible = main.as_ref().and_then(|w| w.is_visible().ok()).unwrap_or(false);
   if let Some(ref win) = main {
     let _ = win.hide();
-    thread::sleep(Duration::from_millis(40));
+    thread::sleep(Duration::from_millis(15));
   }
 
   let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
@@ -56,25 +56,22 @@ fn inject_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
   #[cfg(not(target_os = "macos"))]
   let modifier = Key::Control;
 
-  // Minimal delays for latency; macOS needs some or enigo drops keys (enigo#201). Increase if paste fails.
-  #[cfg(target_os = "macos")]
-  let (press_ms, release_ms) = (40u64, 40u64);
-  #[cfg(not(target_os = "macos"))]
-  let (press_ms, release_ms) = (15u64, 30u64);
+  // Tight delays — just enough for macOS to register keystrokes (enigo#201)
   enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-  thread::sleep(Duration::from_millis(press_ms));
-  enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
   thread::sleep(Duration::from_millis(10));
+  enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+  thread::sleep(Duration::from_millis(5));
   enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())?;
-  thread::sleep(Duration::from_millis(release_ms));
+  thread::sleep(Duration::from_millis(10));
   if let Some(restore) = saved {
     let _ = clipboard.set_text(restore);
   }
 
+  // Re-show after a short delay so the paste lands in the target app
   if was_visible {
     if let Some(ref win) = main {
+      thread::sleep(Duration::from_millis(50));
       let _ = win.show();
-      // Do not set_focus() — leave focus in the app we pasted into (e.g. Notes).
     }
   }
   Ok(())
@@ -97,6 +94,10 @@ pub fn run() {
             .build(),
         )?;
       }
+      // --- Menu bar tray icon (created from JS in lib/tray.ts) ---
+      // Rust setup only handles global shortcut; tray is initialized from frontend
+      // to avoid Tauri version API mismatches.
+
       let handle = app.handle().clone();
       app.global_shortcut().on_shortcut("Control+D", move |_app, _shortcut, event| {
         match event.state {
