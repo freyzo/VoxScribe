@@ -21,7 +21,6 @@ import {
   Minimize2,
   Cpu,
   Brain,
-  Languages,
 } from "lucide-react"
 import type { EditMode, Tone } from "@/hooks/use-transcription"
 
@@ -34,8 +33,6 @@ interface StylePageProps {
   onCustomPromptChange: (prompt: string) => void
   sttModel: string
   onSttModelChange: (model: string) => void
-  inputLanguage: "en" | "zh"
-  onInputLanguageChange: (lang: "en" | "zh") => void
   llmModel: string
   onLlmModelChange: (model: string) => void
   editStrength: number
@@ -55,12 +52,8 @@ const tones: { value: Tone; label: string; description: string; icon: React.Comp
 ]
 
 const sttModels = [
-  { value: "whisper-tiny", label: "Whisper Tiny (EN)", desc: "75MB - Fastest" },
-  { value: "whisper-base", label: "Whisper Base (EN)", desc: "142MB - Balanced" },
-  { value: "whisper-small", label: "Whisper Small (EN)", desc: "466MB - Better" },
-  { value: "whisper-medium", label: "Whisper Medium (EN)", desc: "1.5GB - Best" },
-  { value: "whisper-tiny-multilingual", label: "Whisper Tiny (多语言)", desc: "75MB - Mandarin etc." },
-  { value: "whisper-small-multilingual", label: "Whisper Small (多语言)", desc: "466MB - Mandarin etc." },
+  { value: "whisper-tiny-multilingual", label: "Whisper Tiny (Multilingual)", desc: "75MB - Fastest" },
+  { value: "whisper-small-multilingual", label: "Whisper Small (Multilingual)", desc: "466MB - Better accuracy" },
 ]
 
 const llmModels = [
@@ -79,8 +72,6 @@ export function StylePage({
   onCustomPromptChange,
   sttModel,
   onSttModelChange,
-  inputLanguage,
-  onInputLanguageChange,
   llmModel,
   onLlmModelChange,
   editStrength,
@@ -93,45 +84,6 @@ export function StylePage({
         <p className="mt-1 text-sm text-muted-foreground">
           Configure how Flow edits and refines your dictated text.
         </p>
-
-        {/* Input language: English vs Mandarin → English */}
-        <section className="mt-8">
-          <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">
-            Dictation language
-          </h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Speak in English only, or in Mandarin and get both Chinese + English.
-          </p>
-          <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-            If you see &quot;[speaking in foreign language]&quot;, you're on English-only — switch to <strong>Mandarin → English</strong> below.
-          </p>
-          <div className="mt-3 flex gap-3">
-            <button
-              onClick={() => onInputLanguageChange("en")}
-              className={cn(
-                "flex items-center gap-2 rounded-xl border px-4 py-3 text-left transition-all",
-                inputLanguage === "en"
-                  ? "border-foreground bg-card shadow-sm"
-                  : "border-border bg-card hover:border-muted-foreground/30"
-              )}
-            >
-              <Languages className="size-4 text-muted-foreground" />
-              <span className="text-sm font-medium">English only</span>
-            </button>
-            <button
-              onClick={() => onInputLanguageChange("zh")}
-              className={cn(
-                "flex items-center gap-2 rounded-xl border px-4 py-3 text-left transition-all",
-                inputLanguage === "zh"
-                  ? "border-foreground bg-card shadow-sm"
-                  : "border-border bg-card hover:border-muted-foreground/30"
-              )}
-            >
-              <Languages className="size-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Mandarin (中文) → English</span>
-            </button>
-          </div>
-        </section>
 
         {/* Edit Mode */}
         <section className="mt-8">
@@ -262,7 +214,7 @@ export function StylePage({
                 Speech-to-Text
               </label>
               <p className="text-xs text-muted-foreground">
-                Use a multilingual model (e.g. Whisper Tiny 多语言) when dictating in Mandarin.
+                Multilingual models are used by default for better language coverage.
               </p>
               <Select value={sttModel} onValueChange={onSttModelChange}>
                 <SelectTrigger className="border-border bg-card text-foreground">

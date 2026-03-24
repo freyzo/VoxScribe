@@ -10,10 +10,12 @@ self.onerror = function (ev) {
 };
 
 const STT_MODEL_IDS = {
-  "whisper-tiny": "Xenova/whisper-tiny.en",
-  "whisper-base": "Xenova/whisper-base.en",
-  "whisper-small": "Xenova/whisper-small.en",
-  "whisper-medium": "Xenova/whisper-medium.en",
+  // Route legacy English-only ids to multilingual models to avoid
+  // "[speaking in foreign language]" outputs on non-English speech.
+  "whisper-tiny": "Xenova/whisper-tiny",
+  "whisper-base": "Xenova/whisper-tiny",
+  "whisper-small": "Xenova/whisper-small",
+  "whisper-medium": "Xenova/whisper-small",
   "whisper-tiny-multilingual": "Xenova/whisper-tiny",
   "whisper-small-multilingual": "Xenova/whisper-small",
 };

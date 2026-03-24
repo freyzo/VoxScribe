@@ -11,34 +11,25 @@ import { listen } from "@tauri-apps/api/event"
 import { setTrayRecording } from "@/lib/tray"
 import {
   transcribeInWorker,
-  translateInWorker,
   terminateWorker,
 } from "@/lib/transcription-worker-client"
 import { injectTextIntoActiveApp, preloadTauriInject } from "@/lib/inject-text"
-
-const FOREIGN_LANGUAGE_PLACEHOLDER = /\[?\s*speaking\s+in\s+foreign\s+language\s*\]?\.?/i
 
 interface HomePageProps {
   history: HistoryEntry[]
   setHistory: React.Dispatch<React.SetStateAction<HistoryEntry[]>>
   sttModel: string
-  inputLanguage: "en" | "zh"
-  onOpenStyle?: () => void
 }
 
 export function HomePage({
   history,
   setHistory,
   sttModel,
-  inputLanguage,
-  onOpenStyle,
 }: HomePageProps) {
   const resolvedSttModel =
-    inputLanguage === "zh"
-      ? sttModel === "whisper-small" || sttModel === "whisper-small-multilingual"
-        ? "whisper-small-multilingual"
-        : "whisper-tiny-multilingual"
-      : sttModel
+    sttModel === "whisper-small" || sttModel === "whisper-small-multilingual"
+      ? "whisper-small-multilingual"
+      : "whisper-tiny-multilingual"
 
   const {
     recordingState,
@@ -107,9 +98,7 @@ export function HomePage({
           setProcessingStep("transcribing")
           let finalText: string
           try {
-            finalText = await transcribeInWorker(resolvedSttModel, audio, {
-              forceLanguage: inputLanguage === "zh" ? "zh" : undefined,
-            })
+            finalText = await transcribeInWorker(resolvedSttModel, audio)
           } catch (err) {
             console.error("Transcription failed:", err)
             setProcessingError(err instanceof Error ? err.message : "Transcription failed")
@@ -117,25 +106,10 @@ export function HomePage({
           }
 
           if (finalText) {
-            const isMandarin = inputLanguage === "zh"
             setRawText(finalText)
 
-            // MVP: skip Mandarin→English translation to reduce latency (was adding NLLB model load + run).
-            // When re-enabled: setProcessingStep("translating"), then textToEdit = await translateInWorker(finalText)
-            let textToEdit = finalText
-            // if (isMandarin) {
-            //   setProcessingStep("translating")
-            //   try {
-            //     textToEdit = await translateInWorker(finalText)
-            //   } catch (err) {
-            //     console.error("Translation failed:", err)
-            //     setProcessingError(err instanceof Error ? err.message : "Translation failed")
-            //     textToEdit = finalText
-            //   }
-            // }
-
             setProcessingStep("editing")
-            const edited = await processEdit(textToEdit)
+            const edited = await processEdit(finalText)
             setHistory((prev) => [
               {
                 id: crypto.randomUUID(),
@@ -143,7 +117,7 @@ export function HomePage({
                 editedText: edited,
                 editMode,
                 timestamp: new Date(),
-                sourceLanguage: isMandarin ? "zh" : "en",
+                sourceLanguage: "en",
               },
               ...prev,
             ])
@@ -177,7 +151,6 @@ export function HomePage({
   }, [
     recordingState,
     isModelLoading,
-    inputLanguage,
     resolvedSttModel,
     startRecording,
     stopRecording,
@@ -362,24 +335,8 @@ export function HomePage({
           <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
             <p className="text-sm text-destructive">{processingError ?? audioError}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              You can try again. If you switched to Mandarin mode, wait until the model has finished loading before recording.
+              You can try again after model loading is complete.
             </p>
-          </div>
-        )}
-
-        {/* Hint when user got "[speaking in foreign language]" — they need Mandarin mode */}
-        {inputLanguage === "en" && onOpenStyle && (FOREIGN_LANGUAGE_PLACEHOLDER.test(editedText || rawText) || history.some((e) => FOREIGN_LANGUAGE_PLACEHOLDER.test(e.rawText || e.editedText))) && (
-          <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
-            <p className="text-sm text-foreground">
-              You're on <strong>English only</strong>, so Chinese isn't transcribed. To get Chinese + English, go to <strong>Style</strong> and set <strong>Dictation language</strong> to <strong>Mandarin (中文) → English</strong>.
-            </p>
-            <button
-              type="button"
-              onClick={onOpenStyle}
-              className="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400 hover:underline"
-            >
-              Go to Style →
-            </button>
           </div>
         )}
 
@@ -395,35 +352,17 @@ export function HomePage({
           </div>
         )}
 
-        {/* Latest edited text - scrollable when long; show both Chinese + English when Mandarin */}
+        {/* Latest edited text - scrollable when long */}
         {editedText && recordingState !== "recording" && (
           <div className="mt-4 flex max-h-48 flex-col gap-3 overflow-y-auto rounded-lg border border-border bg-card p-4">
-            {inputLanguage === "zh" && rawText && (
-              <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-muted-foreground">原文 / Original</p>
-                  <p className="text-sm leading-relaxed text-foreground">{rawText}</p>
-                </div>
-                <button
-                  onClick={() => handleCopy(rawText, "latest-raw")}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                  aria-label="Copy Chinese"
-                >
-                  {copiedId === "latest-raw" ? <Check className="size-4" /> : <Copy className="size-4" />}
-                </button>
-              </div>
-            )}
             <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                {inputLanguage === "zh" && (
-                  <p className="text-xs font-medium text-muted-foreground">English</p>
-                )}
                 <p className="text-sm leading-relaxed text-foreground">{editedText}</p>
               </div>
               <button
                 onClick={() => handleCopy(editedText, "latest")}
                 className="shrink-0 text-muted-foreground hover:text-foreground"
-                aria-label="Copy English"
+                aria-label="Copy text"
               >
                 {copiedId === "latest" ? <Check className="size-4" /> : <Copy className="size-4" />}
               </button>
@@ -445,7 +384,6 @@ export function HomePage({
                       hour: "2-digit",
                       minute: "2-digit",
                     })
-                    const isZh = entry.sourceLanguage === "zh"
                     const displayText = entry.editedText || entry.rawText
                     return (
                       <div
@@ -457,25 +395,7 @@ export function HomePage({
                           <span>{timeStr}</span>
                         </div>
                         <div className="flex min-w-0 flex-1 flex-col gap-2">
-                          {isZh && entry.rawText && (
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-medium text-muted-foreground">原文 / Original</p>
-                                <p className="max-h-24 overflow-y-auto text-sm leading-relaxed text-foreground">
-                                  {entry.rawText}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => handleCopy(entry.rawText, `${entry.id}-raw`)}
-                                className="shrink-0 text-muted-foreground hover:text-foreground"
-                                aria-label="Copy Chinese"
-                              >
-                                {copiedId === `${entry.id}-raw` ? <Check className="size-4" /> : <Copy className="size-4" />}
-                              </button>
-                            </div>
-                          )}
                           <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-                            {isZh && <p className="text-xs font-medium text-muted-foreground">English</p>}
                             <p className="max-h-32 min-w-0 flex-1 overflow-y-auto text-sm leading-relaxed text-foreground">
                               {displayText}
                             </p>

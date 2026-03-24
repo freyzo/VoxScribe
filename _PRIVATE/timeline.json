@@ -1,6 +1,6 @@
 {
   "session_id": "localflow-2026-02",
-  "last_updated": "2026-02-24T00:00:00Z",
+  "last_updated": "2026-03-24T06:46:13Z",
   "status": "ACTIVE",
   "goal": {
     "primary": "Wispr Flow-like app with local STT; fix Ctrl+D to log real transcribed speech to home",
@@ -11,7 +11,8 @@
     "start": "2026-02-24T00:00:00Z",
     "end": null,
     "events": [
-      {"time": "00:00", "action": "Fixed STT", "details": "Replaced prompt() placeholder with real Whisper via @huggingface/transformers; Ctrl+D now records and transcribes to history"}
+      {"time": "00:00", "action": "Fixed STT", "details": "Replaced prompt() placeholder with real Whisper via @huggingface/transformers; Ctrl+D now records and transcribes to history"},
+      {"time": "23:46", "action": "Fixed dictation flow", "details": "Removed Mandarin translate mode, forced multilingual Whisper defaults, and resolved duplicate tauri/next lock conflicts"}
     ]
   },
   "current_state": {

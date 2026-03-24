@@ -39,8 +39,7 @@ export default function FlowApp() {
   const [editMode, setEditMode] = useState<EditMode>("light")
   const [tone, setTone] = useState<Tone>("professional")
   const [customPrompt, setCustomPrompt] = useState("")
-  const [sttModel, setSttModel] = useState("whisper-tiny")
-  const [inputLanguage, setInputLanguage] = useState<"en" | "zh">("en")
+  const [sttModel, setSttModel] = useState("whisper-tiny-multilingual")
   const [llmModel, setLlmModel] = useState("phi-3-mini")
   const [editStrength, setEditStrength] = useState(50)
 
@@ -71,8 +70,6 @@ export default function FlowApp() {
             history={history}
             setHistory={setHistory}
             sttModel={sttModel}
-            inputLanguage={inputLanguage}
-            onOpenStyle={() => setActivePage("style")}
           />
         )}
 
@@ -94,8 +91,6 @@ export default function FlowApp() {
             onCustomPromptChange={setCustomPrompt}
             sttModel={sttModel}
             onSttModelChange={setSttModel}
-            inputLanguage={inputLanguage}
-            onInputLanguageChange={setInputLanguage}
             llmModel={llmModel}
             onLlmModelChange={setLlmModel}
             editStrength={editStrength}
