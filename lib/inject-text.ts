@@ -20,6 +20,10 @@ export function preloadTauriInject(): void {
   if (!tauriInvokePromise) tauriInvokePromise = import("@tauri-apps/api/core")
 }
 
+export function isRunningInTauri(): boolean {
+  return isTauri()
+}
+
 export async function injectTextIntoActiveApp(text: string): Promise<{ ok: boolean; message?: string }> {
   const trimmed = (text || "").trim()
   if (!trimmed) return { ok: true }
@@ -29,25 +33,25 @@ export async function injectTextIntoActiveApp(text: string): Promise<{ ok: boole
       if (!tauriInvokePromise) tauriInvokePromise = import("@tauri-apps/api/core")
       const { invoke } = await tauriInvokePromise
       await invoke("inject_text", { text: trimmed })
-      return { ok: true }
+      return { ok: true, message: "Typed into active app" }
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e)
       const hint =
         /accessibility|permission|trusted/i.test(raw) || raw.includes("enigo") || raw.includes("clipboard")
-          ? " On macOS: add VoxScribe in System Settings → Privacy & Security → Accessibility."
+          ? "\n\nFix: System Settings → Privacy & Security → Accessibility → add VoxScribe"
           : ""
       return { ok: false, message: raw + hint }
     }
   }
 
+  // Not in Tauri — browser fallback
   try {
     await navigator.clipboard.writeText(trimmed)
-    return { ok: true, message: "Copied to clipboard. Paste with Cmd+V (Mac) or Ctrl+V (Windows) where you need it." }
+    return { ok: false, message: "Not running as desktop app. Text copied to clipboard — paste with Cmd+V." }
   } catch {
     return {
       ok: false,
-      message:
-        "Could not copy to clipboard. Use the desktop app (VoxScribe) for typing into other apps like Notes.",
+      message: "Not running as desktop app. Build with `pnpm tauri:dev` for auto-typing into other apps.",
     }
   }
 }

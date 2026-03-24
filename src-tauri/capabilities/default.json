@@ -6,6 +6,8 @@
     "main"
   ],
   "permissions": [
-    "core:default","core:tray:default"
+    "core:default",
+    "core:tray:default",
+    "global-shortcut:default"
   ]
 }

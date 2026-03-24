@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useCallback, useRef } from "react"
-// Lazy-load transformers only when loadModel/transcribeAudio is used (home uses worker, so main thread never loads this).
 
 export type EditMode = "raw" | "light" | "aggressive"
 export type Tone = "casual" | "professional" | "concise"
@@ -36,7 +35,7 @@ declare global {
   }
 }
 
-export interface LocalTranscriptionState {
+export interface TranscriptionState {
   rawText: string
   editedText: string
   isTranscribing: boolean
@@ -45,14 +44,11 @@ export interface LocalTranscriptionState {
   editMode: EditMode
   tone: Tone
   customPrompt: string
-  isModelLoading: boolean
-  modelError: string | null
 }
 
-export interface LocalTranscriptionActions {
+export interface TranscriptionActions {
   startTranscription: () => void
   stopTranscription: () => string
-  transcribeAudio: (audio: Float32Array) => Promise<string>
   setEditMode: (mode: EditMode) => void
   setTone: (tone: Tone) => void
   setCustomPrompt: (prompt: string) => void
@@ -60,28 +56,6 @@ export interface LocalTranscriptionActions {
   clearTranscript: () => void
   setRawText: (text: string) => void
   setEditedText: (text: string) => void
-  loadModel: (modelId: string) => Promise<void>
-}
-
-const STT_MODEL_IDS: Record<string, string> = {
-  "whisper-tiny": "Xenova/whisper-tiny.en",
-  "whisper-base": "Xenova/whisper-base.en",
-  "whisper-small": "Xenova/whisper-small.en",
-  "whisper-medium": "Xenova/whisper-medium.en",
-  // Multilingual (no .en) — use for Mandarin/Chinese input
-  "whisper-tiny-multilingual": "Xenova/whisper-tiny",
-  "whisper-small-multilingual": "Xenova/whisper-small",
-}
-
-/** Collapse Whisper repetition/hallucination (e.g. "no, no, no, no" -> "no") */
-function collapseRepetition(text: string): string {
-  if (!text.trim()) return text
-  let out = text.trim()
-  // Collapse repeated words (same word 3+ times in a row, with optional commas/spaces)
-  out = out.replace(/\b(\w+(?:'\w+)?)(?:\s*,\s*\1\s*|\s+\1\s*){2,}/gi, "$1 ")
-  // Collapse repeated phrases (2–4 words repeated)
-  out = out.replace(/((?:\b\w+(?:'\w+)?\s*){1,4})(?:\s*,\s*|\s+)(\1\s*){2,}/gi, (_, phrase) => phrase.trim() + " ")
-  return out.replace(/\s{2,}/g, " ").trim()
 }
 
 function applyLightEdit(text: string): string {
@@ -189,10 +163,10 @@ function applyAggressiveRewrite(text: string, tone: Tone): string {
     case "concise":
       result = result
         .replace(/\bin order to\b/g, "to")
-        .replace(/\bdue to fact that\b/g, "because")
+        .replace(/\bdue to the fact that\b/g, "because")
         .replace(/\bat this point in time\b/g, "now")
-        .replace(/\bin event that\b/g, "if")
-        .replace(/\bfor purpose of\b/g, "to")
+        .replace(/\bin the event that\b/g, "if")
+        .replace(/\bfor the purpose of\b/g, "to")
         .replace(/\bwith regard to\b/g, "about")
         .replace(/\bin spite of\b/g, "despite")
         .replace(/\bit is important to note that\b/g, "")
@@ -216,7 +190,7 @@ function applyAggressiveRewrite(text: string, tone: Tone): string {
   return result.replace(/\s{2,}/g, " ").trim()
 }
 
-export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTranscriptionState & LocalTranscriptionActions {
+export function useTranscription(): TranscriptionState & TranscriptionActions {
   const [rawText, setRawText] = useState("")
   const [editedText, setEditedText] = useState("")
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -225,46 +199,58 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
   const [editMode, setEditMode] = useState<EditMode>("light")
   const [tone, setTone] = useState<Tone>("professional")
   const [customPrompt, setCustomPrompt] = useState("")
-  const [isModelLoading, setIsModelLoading] = useState(false)
-  const [modelError, setModelError] = useState<string | null>(null)
 
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const finalTranscriptRef = useRef("")
-  const pipelineRef = useRef<((audio: Float32Array, opts: object) => Promise<unknown>) | null>(null)
-  const currentModelIdRef = useRef<string>("")
-
-  const loadModel = useCallback(async (modelId: string) => {
-    const hfModelId = STT_MODEL_IDS[modelId] ?? STT_MODEL_IDS["whisper-tiny"]
-    if (pipelineRef.current && currentModelIdRef.current === modelId) return
-
-    setIsModelLoading(true)
-    setModelError(null)
-
-    try {
-      const { pipeline } = await import("@huggingface/transformers")
-      console.log(`Loading STT model: ${modelId} (${hfModelId})`)
-      const pipe = await pipeline("automatic-speech-recognition", hfModelId, {
-        progress_callback: (progress: unknown) => {
-          const p = progress as { progress?: number }
-          if (p?.progress != null) console.log("Model load progress:", Math.round(p.progress * 100), "%")
-        },
-      })
-      pipelineRef.current = pipe as (audio: Float32Array, opts: object) => Promise<unknown>
-      currentModelIdRef.current = modelId
-      console.log("STT model loaded successfully")
-    } catch (error) {
-      console.error("Failed to load STT model:", error)
-      setModelError(error instanceof Error ? error.message : "Failed to load model")
-    } finally {
-      setIsModelLoading(false)
-    }
-  }, [])
 
   const startTranscription = useCallback(() => {
-    setModelError(null)
-    setIsTranscribing(true)
-    finalTranscriptRef.current = ""
-    setInterimText("Listening...")
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = "en-US"
+
+    recognition.onstart = () => {
+      setIsTranscribing(true)
+      finalTranscriptRef.current = ""
+    }
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = ""
+      let final = ""
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript
+        if (event.results[i].isFinal) {
+          final += transcript
+        } else {
+          interim += transcript
+        }
+      }
+
+      if (final) {
+        finalTranscriptRef.current += final
+        setRawText(finalTranscriptRef.current)
+      }
+      setInterimText(interim)
+    }
+
+    recognition.onerror = () => {
+      setIsTranscribing(false)
+    }
+
+    recognition.onend = () => {
+      setIsTranscribing(false)
+      setInterimText("")
+    }
+
+    recognitionRef.current = recognition
+    recognition.start()
   }, [])
 
   const stopTranscription = useCallback(() => {
@@ -274,34 +260,8 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
     }
     setIsTranscribing(false)
     setInterimText("")
-    return ""
+    return finalTranscriptRef.current
   }, [])
-
-  const transcribeAudio = useCallback(
-    async (audio: Float32Array): Promise<string> => {
-      if (!pipelineRef.current) {
-        await loadModel(modelId)
-        if (!pipelineRef.current) return ""
-      }
-      try {
-        const result = await pipelineRef.current(audio, { chunk_length_s: 30, stride_length_s: 5 })
-        const out = Array.isArray(result) ? result[0] : result
-        let text = out?.text != null ? String(out.text).trim() : ""
-        // Whisper returns [BLANK_AUDIO] for silent or undetectable speech — treat as empty
-        if (text === "[BLANK_AUDIO]" || !text.replace(/\[\s*BLANK_AUDIO\s*\]/i, "").trim()) {
-          setModelError("No speech detected. Try speaking again.")
-          return ""
-        }
-        setModelError(null)
-        return collapseRepetition(text)
-      } catch (error) {
-        console.error("Transcription error:", error)
-        setModelError(error instanceof Error ? error.message : "Transcription failed")
-        return ""
-      }
-    },
-    [modelId, loadModel]
-  )
 
   const processEdit = useCallback(
     async (text: string): Promise<string> => {
@@ -313,8 +273,8 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
 
       setIsEditing(true)
 
-      // MVP: no artificial delay — keep latency low until text shows in other apps
-      // await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 400))
+      // Simulate processing delay for realism
+      await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 400))
 
       let result: string
       if (editMode === "light") {
@@ -346,11 +306,8 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
     editMode,
     tone,
     customPrompt,
-    isModelLoading,
-    modelError,
     startTranscription,
     stopTranscription,
-    transcribeAudio,
     setEditMode,
     setTone,
     setCustomPrompt,
@@ -358,6 +315,5 @@ export function useLocalTranscription(modelId: string = "whisper-tiny"): LocalTr
     clearTranscript,
     setRawText,
     setEditedText,
-    loadModel,
   }
 }
